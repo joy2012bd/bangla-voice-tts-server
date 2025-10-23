@@ -6,7 +6,7 @@ from flask import Flask, request, send_file, jsonify
 from gtts import gTTS
 from datetime import datetime, timedelta
 import pytz
-import bangla  # pip install bangla
+import bangla
 
 app = Flask(__name__)
 
@@ -139,7 +139,7 @@ def bangla_date_time():
     tz = pytz.timezone("Asia/Dhaka")
     now = datetime.now(tz)
 
-    # বাংলা দিন নাম
+    # Benglai days name
     bn_day_name = {
         "Saturday": "শনিবার",
         "Sunday": "রবিবার",
@@ -150,7 +150,7 @@ def bangla_date_time():
         "Friday": "শুক্রবার",
     }[now.strftime("%A")]
 
-    # --- সঠিক বাংলা তারিখ নির্ণয় ---
+    # --- Calculation correct benglai time ---
     g_date = now.date()
     if g_date >= datetime(g_date.year, 4, 14).date():
         bangla_year = g_date.year - 593
@@ -185,14 +185,14 @@ def bangla_date_time():
     bangla_day = delta_days + 1
     bangla_month = bangla_months[month_index][0]
 
-    # বাংলায় সংখ্যা রূপান্তর
+    # Convert int to bengali
     def to_bn_digits(s: str) -> str:
         return s.translate(str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯"))
 
-    bn_day = to_bn_digits(str(bangla_day))
+    bn_day = to_bn_digits(str(bangla_day-1)) # To fix wtih indian time
     bn_year = to_bn_digits(str(bangla_year))
 
-    # 🕒 সময় বাংলায়
+    # 🕒 Time in Bengali
     hour = now.hour
     minute = now.minute
     period = "রাত" if hour < 4 else "ভোর" if hour < 6 else "সকাল" if hour < 12 else "দুপুর" if hour < 16 else "বিকেল" if hour < 18 else "সন্ধ্যা" if hour < 20 else "রাত"
@@ -201,9 +201,9 @@ def bangla_date_time():
     bn_hour = to_bn_digits(str(hour_12))
     bn_minute = to_bn_digits(f"{minute:02d}")
 
-    # চূড়ান্ত পাঠ্য
+    # Final Text
     text = (
-        f"আজ {bn_day}ই {bangla_month} {bn_year} বঙ্গাব্দ, {bn_day_name}। "
+        f"আজ {bn_day}ই {bangla_month}, {bn_year} বঙ্গাব্দ, {bn_day_name}। "
         f"এখন সময় {period} {bn_hour}টা {bn_minute} মিনিট।"
     )
 
