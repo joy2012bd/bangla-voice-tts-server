@@ -1,18 +1,18 @@
-# server.py
 import os
 import time
 import tempfile
+import requests
 from flask import Flask, request, send_file, jsonify
 from gtts import gTTS
-import requests
+from datetime import datetime, timedelta
+import pytz
+import bangla  # pip install bangla
 
 app = Flask(__name__)
 
-# config from env
-OPENWEATHER_KEY = "8c04437c21dcdcddace4e76e5c850dd7"  # set in Render dashboard
-CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))  # seconds, default 5 minutes
-
-# simple in-memory cache to reduce API calls: {key: (timestamp, mp3_bytes or text)}
+# Config
+OPENWEATHER_KEY = os.getenv("OPENWEATHER_API_KEY", "8c04437c21dcdcddace4e76e5c850dd7")
+CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
 _cache = {}
 
 def cache_get(key):
@@ -27,59 +27,35 @@ def cache_get(key):
 def cache_set(key, data):
     _cache[key] = (time.time(), data)
 
-@app.route("/tts")
-def tts_endpoint():
-    """
-    Generic TTS endpoint:
-    GET /tts?text=...&lang=bn
-    Returns: mp3 file
-    """
-    text = request.args.get("text", "").strip()
-    lang = request.args.get("lang", "bn")
-
-    if not text:
-        return jsonify({"error": "text param required"}), 400
-    if len(text) > 1000:
-        return jsonify({"error": "text too long"}), 400
-
-    cache_key = f"tts::{lang}::{text}"
+def tts_bangla(text, cache_key):
+    """Generate Bengali TTS with cache"""
     cached = cache_get(cache_key)
     if cached:
-        # cached is bytes
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
         tmp.write(cached)
         tmp.flush()
         tmp.close()
         return send_file(tmp.name, mimetype="audio/mpeg", as_attachment=False)
 
-    # generate with gTTS
-    try:
-        tts = gTTS(text=text, lang=lang)
-        tmp_fp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-        tmp_name = tmp_fp.name
-        tmp_fp.close()
-        tts.save(tmp_name)
-        with open(tmp_name, "rb") as f:
-            data = f.read()
-        cache_set(cache_key, data)
-        return send_file(tmp_name, mimetype="audio/mpeg", as_attachment=False)
-    finally:
-        # cleanup: let send_file finish; we won't delete immediately to avoid race
-        pass
+    tts = gTTS(text=text, lang="bn")
+    tmp_fp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    tmp_name = tmp_fp.name
+    tmp_fp.close()
+    tts.save(tmp_name)
+    with open(tmp_name, "rb") as f:
+        data = f.read()
+    cache_set(cache_key, data)
+    return send_file(tmp_name, mimetype="audio/mpeg", as_attachment=False)
+
 
 @app.route("/weather")
 def weather_tts():
-    """
-    Weather endpoint that returns TTS mp3 of current weather in Bengali.
-    GET /weather?city=Dhaka&units=metric
-    """
+    """Weather + 3-day forecast Bengali TTS"""
     city = request.args.get("city", "Dhaka")
     units = request.args.get("units", "metric")
-    lang = "bn"
+    cache_key = f"weather::{city}::{units}"
 
-    # build cache key by city+units
-    cache_key_text = f"weather_text::{city}::{units}"
-    cached_audio = cache_get(f"tts::{lang}::{cache_key_text}")
+    cached_audio = cache_get(cache_key)
     if cached_audio:
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
         tmp.write(cached_audio)
@@ -88,54 +64,65 @@ def weather_tts():
         return send_file(tmp.name, mimetype="audio/mpeg", as_attachment=False)
 
     if not OPENWEATHER_KEY:
-        return jsonify({"error": "OPENWEATHER_API_KEY not configured"}), 500
+        return jsonify({"error": "OPENWEATHER_API_KEY missing"}), 500
 
-    # call OpenWeatherMap current weather API
-    url = "https://api.openweathermap.org/data/2.5/weather"
-    params = {"q": city, "appid": OPENWEATHER_KEY, "units": units, "lang": "en"}  # en for condition -> we'll translate
-    resp = requests.get(url, params=params, timeout=8)
-    if resp.status_code != 200:
-        return jsonify({"error": "weather api failed", "detail": resp.text}), 502
+    # --- current weather ---
+    url_now = "https://api.openweathermap.org/data/2.5/weather"
+    params_now = {"q": city, "appid": OPENWEATHER_KEY, "units": units, "lang": "en"}
+    resp_now = requests.get(url_now, params=params_now, timeout=10)
+    if resp_now.status_code != 200:
+        return jsonify({"error": "weather api failed", "detail": resp_now.text}), 502
+    now = resp_now.json()
+    temp = now["main"]["temp"]
+    desc = now["weather"][0]["description"]
 
-    j = resp.json()
-    # extract useful bits robustly
-    try:
-        temp = j["main"]["temp"]
-        feels = j["main"].get("feels_like")
-        desc = j["weather"][0]["description"]  # in language=en per param
-        # make a Bengali sentence. Simplest: translate known terms, or just compose in Bengali.
-        text = f"{city} এ বর্তমানে তাপমাত্রা {round(temp)} ডিগ্রি সেলসিয়াস। অবস্থা: {desc}।"
-    except Exception as e:
-        return jsonify({"error": "parse error", "detail": str(e), "resp": j}), 500
-
-    # Optionally refine translation for common words (small map)
-    small_map = {
-        "clear sky":"পরিষ্কার আকাশ",
-        "broken clouds":"আবহাওয়া মেঘলা",
-        "few clouds":"কিছু মেঘ",
-        "scattered clouds":"বিস্তৃত মেঘ",
-        "overcast clouds":"সম্পূর্ণ মেঘলা",
-        "light rain":"অল্প বৃষ্টি",
-        "moderate rain":"মাঝারি বৃষ্টি",
-        "heavy intensity rain":"তীব্র বৃষ্টি",
-        "shower rain":"বৃষ্টি"
+    # small translation map
+    desc_map = {
+        "clear sky": "পরিষ্কার আকাশ",
+        "few clouds": "কিছু মেঘ",
+        "scattered clouds": "বিক্ষিপ্ত মেঘ",
+        "broken clouds": "আংশিক মেঘলা",
+        "overcast clouds": "সম্পূর্ণ মেঘলা",
+        "light rain": "হালকা বৃষ্টি",
+        "moderate rain": "মাঝারি বৃষ্টি",
+        "heavy rain": "তীব্র বৃষ্টি",
+        "thunderstorm": "বজ্রসহ বৃষ্টি"
     }
-    for en, bn in small_map.items():
+    for en, bn in desc_map.items():
         if en in desc.lower():
-            text = f"{city} এ বর্তমানে তাপমাত্রা {round(temp)} ডিগ্রি সেলসিয়াস। অবস্থা: {bn}।"
+            desc = bn
             break
 
-    # generate TTS (reuse /tts logic but inline to avoid extra HTTP)
-    cache_key = f"tts::{lang}::{cache_key_text}"
-    cached = cache_get(cache_key)
-    if cached:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-        tmp.write(cached)
-        tmp.flush()
-        tmp.close()
-        return send_file(tmp.name, mimetype="audio/mpeg", as_attachment=False)
+    # --- forecast (next 3 days) ---
+    url_forecast = "https://api.openweathermap.org/data/2.5/forecast"
+    params_fore = {"q": city, "appid": OPENWEATHER_KEY, "units": units}
+    resp_fore = requests.get(url_forecast, params=params_fore, timeout=10)
+    if resp_fore.status_code == 200:
+        fore = resp_fore.json()
+        temps = []
+        rains = 0
+        for item in fore["list"][:24*3//3]:  # next 3 days (3h intervals)
+            temps.append(item["main"]["temp"])
+            if "rain" in item:
+                rains += 1
+        avg_temp = sum(temps)/len(temps)
+        rain_msg = (
+            "আগামী তিন দিনে বৃষ্টি হবার সম্ভাবনা আছে।" if rains > 0 else
+            "আগামী তিন দিনে বৃষ্টি হবার সম্ভাবনা নেই।"
+        )
+        temp_trend = (
+            "তাপমাত্রা কিছুটা বাড়তে পারে।" if avg_temp > temp + 2 else
+            "তাপমাত্রা কিছুটা কমতে পারে।" if avg_temp < temp - 2 else
+            "তাপমাত্রা প্রায় একই থাকবে।"
+        )
+        forecast_text = f"{rain_msg} {temp_trend}"
+    else:
+        forecast_text = "আগামী তিন দিনের পূর্বাভাস পাওয়া যায়নি।"
 
-    tts = gTTS(text=text, lang=lang)
+    # --- final text ---
+    text = f"{city} এ বর্তমানে তাপমাত্রা {round(temp)} ডিগ্রি সেলসিয়াস। অবস্থা: {desc}। {forecast_text}"
+
+    tts = gTTS(text=text, lang="bn")
     tmp_fp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
     tmp_name = tmp_fp.name
     tmp_fp.close()
@@ -143,9 +130,85 @@ def weather_tts():
     with open(tmp_name, "rb") as f:
         data = f.read()
     cache_set(cache_key, data)
-    # also cache the underlying text key so repeated /weather calls within TTL don't re-API
-    cache_set(f"weather_text::{city}::{units}", text)
+
     return send_file(tmp_name, mimetype="audio/mpeg", as_attachment=False)
+
+@app.route("/bangla-date-time")
+def bangla_date_time():
+    """আজকের বাংলা তারিখ, দিন ও সময় বলে (সংশোধিত সংস্করণ)"""
+    tz = pytz.timezone("Asia/Dhaka")
+    now = datetime.now(tz)
+
+    # বাংলা দিন নাম
+    bn_day_name = {
+        "Saturday": "শনিবার",
+        "Sunday": "রবিবার",
+        "Monday": "সোমবার",
+        "Tuesday": "মঙ্গলবার",
+        "Wednesday": "বুধবার",
+        "Thursday": "বৃহস্পতিবার",
+        "Friday": "শুক্রবার",
+    }[now.strftime("%A")]
+
+    # --- সঠিক বাংলা তারিখ নির্ণয় ---
+    g_date = now.date()
+    if g_date >= datetime(g_date.year, 4, 14).date():
+        bangla_year = g_date.year - 593
+        new_year_start = datetime(g_date.year, 4, 14).date()
+    else:
+        bangla_year = g_date.year - 594
+        new_year_start = datetime(g_date.year - 1, 4, 14).date()
+
+    bangla_months = [
+        ("বৈশাখ", 31),
+        ("জ্যৈষ্ঠ", 31),
+        ("আষাঢ়", 31),
+        ("শ্রাবণ", 31),
+        ("ভাদ্র", 31),
+        ("আশ্বিন", 30),
+        ("কার্তিক", 30),
+        ("অগ্রহায়ণ", 30),
+        ("পৌষ", 30),
+        ("মাঘ", 30),
+        ("ফাল্গুন", 29),
+        ("চৈত্র", 30)
+    ]
+
+    delta_days = (g_date - new_year_start).days
+    month_index = 0
+    for i, (_, days_in_month) in enumerate(bangla_months):
+        if delta_days < days_in_month:
+            month_index = i
+            break
+        delta_days -= days_in_month
+
+    bangla_day = delta_days + 1
+    bangla_month = bangla_months[month_index][0]
+
+    # বাংলায় সংখ্যা রূপান্তর
+    def to_bn_digits(s: str) -> str:
+        return s.translate(str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯"))
+
+    bn_day = to_bn_digits(str(bangla_day))
+    bn_year = to_bn_digits(str(bangla_year))
+
+    # 🕒 সময় বাংলায়
+    hour = now.hour
+    minute = now.minute
+    period = "রাত" if hour < 4 else "ভোর" if hour < 6 else "সকাল" if hour < 12 else "দুপুর" if hour < 16 else "বিকেল" if hour < 18 else "সন্ধ্যা" if hour < 20 else "রাত"
+    hour_12 = hour % 12 or 12
+
+    bn_hour = to_bn_digits(str(hour_12))
+    bn_minute = to_bn_digits(f"{minute:02d}")
+
+    # চূড়ান্ত পাঠ্য
+    text = (
+        f"আজ {bn_day}ই {bangla_month} {bn_year} বঙ্গাব্দ, {bn_day_name}। "
+        f"এখন সময় {period} {bn_hour}টা {bn_minute} মিনিট।"
+    )
+
+    return tts_bangla(text, f"date_time::{now.strftime('%Y-%m-%d-%H:%M')}")
+
 
 
 @app.route("/ping")
