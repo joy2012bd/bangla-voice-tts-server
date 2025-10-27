@@ -7,8 +7,12 @@ from gtts import gTTS
 from datetime import datetime, timedelta
 import pytz
 import bangla
+import whisper
 
 app = Flask(__name__)
+
+# --- Whisper model load ---
+whisper_model = whisper.load_model("small")  # small/medium/large, small enough for CPU
 
 # Config
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_API_KEY", "8c04437c21dcdcddace4e76e5c850dd7")
@@ -210,6 +214,37 @@ def bangla_date_time():
     return tts_bangla(text, f"date_time::{now.strftime('%Y-%m-%d-%H:%M')}")
 
 
+# ================= New Route for STT ================= #
+@app.route("/speech-to-text", methods=["POST"])
+def speech_to_text():
+    """
+    Accepts audio file via POST (form-data 'file'), returns Bengali text using Whisper
+    """
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "Empty filename"}), 400
+
+    # Save uploaded file temporarily
+    tmp_fp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    tmp_name = tmp_fp.name
+    tmp_fp.close()
+    file.save(tmp_name)
+
+    # Transcribe using Whisper
+    try:
+        result = whisper_model.transcribe(tmp_name, language="bn")
+        text = result.get("text", "").strip()
+    except Exception as e:
+        return jsonify({"error": "Transcription failed", "detail": str(e)}), 500
+    finally:
+        os.remove(tmp_name)
+
+    return jsonify({"text": text})
+
+# =================================================== #
 
 @app.route("/ping")
 def ping():
