@@ -4,5 +4,3 @@ requests==2.31.0
 gunicorn==20.1.0
 pytz==2023.3
 bangla==0.0.2
-openai-whisper==20231117
-torch==2.2.0
