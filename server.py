@@ -7,6 +7,7 @@ from gtts import gTTS
 from datetime import datetime, timedelta
 import pytz
 import bangla
+import json
 
 app = Flask(__name__)
 
@@ -14,6 +15,10 @@ app = Flask(__name__)
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_API_KEY", "8c04437c21dcdcddace4e76e5c850dd7")
 CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
 _cache = {}
+
+# Load Json
+with open("ekadashis_2025.json", "r", encoding="utf-8") as f:
+    ekadashis_2025 = json.load(f)
 
 def cache_get(key):
     v = _cache.get(key)
@@ -209,7 +214,56 @@ def bangla_date_time():
 
     return tts_bangla(text, f"date_time::{now.strftime('%Y-%m-%d-%H:%M')}")
 
+@app.route("/bangla-time")
+def bangla_time():
+    """আজকের বর্তমান সময় বলে (সংশোধিত সংস্করণ)"""
+    tz = pytz.timezone("Asia/Dhaka")
+    now = datetime.now(tz)
 
+    # 🕒 Time in Bengali
+    hour = now.hour
+    minute = now.minute
+    period = "রাত" if hour < 4 else "ভোর" if hour < 6 else "সকাল" if hour < 12 else "দুপুর" if hour < 16 else "বিকেল" if hour < 18 else "সন্ধ্যা" if hour < 20 else "রাত"
+    hour_12 = hour % 12 or 12
+    
+    # Convert int to bengali
+    def to_bn_digits(s: str) -> str:
+        return s.translate(str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯"))
+
+    bn_hour = to_bn_digits(str(hour_12))
+    bn_minute = to_bn_digits(f"{minute:02d}")
+
+    # Final Text
+    text = (
+        f"এখন সময়, {period} {bn_hour}টা {bn_minute} মিনিট।"
+    )
+
+    return tts_bangla(text, f"date_time::{now.strftime('%Y-%m-%d-%H:%M')}")
+
+# Ekadoshi 
+@app.route("/ekadoshi")
+def ekadoshi():
+    today = datetime.today().date()
+
+    next_ekadashi = None
+    min_days = None
+
+    for ekadashi in ekadashis_2025:
+        ekadashi_date = datetime.strptime(ekadashi["english-date"], "%d-%m-%Y").date()
+        delta_days = (ekadashi_date - today).days
+        if delta_days >= 0:
+            if min_days is None or delta_days < min_days:
+                min_days = delta_days
+                next_ekadashi = ekadashi
+
+    if next_ekadashi:
+        bangla_day = next_ekadashi["bangla-date"].split(",")[0]
+        text = f"আজ থেকে {min_days} দিন পর {bangla_day}, {next_ekadashi['name']}"
+    else:
+        text = "এই বছরের আর কোনো একাদশী বাকি নেই।"
+
+    cache_key = f"ekadoshi::{today.strftime('%Y-%m-%d')}"
+    return tts_bangla(text, cache_key)
 
 @app.route("/ping")
 def ping():
