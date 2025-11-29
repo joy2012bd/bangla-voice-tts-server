@@ -268,6 +268,13 @@ def ekadoshi():
 @app.route("/ping")
 def ping():
     return "OK"
+    
+# Keep Server Alive
+@app.route("/alive")
+def alive():
+    today = datetime.today().date()
+    cache_key = f"alive::{today.strftime('%Y-%m-%d')}"
+    return tts_bangla("য়ি", cache_key)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
