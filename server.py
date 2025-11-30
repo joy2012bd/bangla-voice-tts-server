@@ -125,7 +125,7 @@ def weather_tts():
         forecast_text = "আগামী তিন দিনের পূর্বাভাস পাওয়া যায়নি।"
 
     # --- final text ---
-    text = f"{city} এ বর্তমানে তাপমাত্রা {round(temp)} ডিগ্রি সেলসিয়াস। অবস্থা: {desc}। {forecast_text}"
+    text = f"আজকের আবহাওয়া। এই মুহুর্তে {city} এ তাপমাত্রা {round(temp)} ডিগ্রি সেলসিয়াস। অবস্থা: {desc}। {forecast_text}"
 
     tts = gTTS(text=text, lang="bn")
     tmp_fp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
