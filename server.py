@@ -17,8 +17,11 @@ CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
 _cache = {}
 
 # Load Json
-with open("ekadashis_2025.json", "r", encoding="utf-8") as f:
-    ekadashis_2025 = json.load(f)
+try:
+    with open("ekadashis_2025.json", "r", encoding="utf-8") as f:
+        ekadashis_2025 = json.load(f)
+except FileNotFoundError:
+    ekadashis_2025 = [] # Fallback if file not found
 
 def cache_get(key):
     v = _cache.get(key)
@@ -116,16 +119,16 @@ def weather_tts():
             "আগামী তিন দিনে বৃষ্টি হবার সম্ভাবনা নেই।"
         )
         temp_trend = (
-            "তাপমাত্রা কিছুটা বাড়তে পারে।" if avg_temp > temp + 2 else
+            "তাপমাত্রা কিছুটা বাড়তে পারে।" if avg_temp > temp + 2 else
             "তাপমাত্রা কিছুটা কমতে পারে।" if avg_temp < temp - 2 else
-            "তাপমাত্রা প্রায় একই থাকবে।"
+            "তাপমাত্রা প্রায় একই থাকবে।"
         )
         forecast_text = f"{rain_msg} {temp_trend}"
     else:
-        forecast_text = "আগামী তিন দিনের পূর্বাভাস পাওয়া যায়নি।"
+        forecast_text = "আগামী তিন দিনের পূর্বাভাস পাওয়া যায়নি।"
 
     # --- final text ---
-    text = f"আজকের আবহাওয়া। এই মুহুর্তে {city} এ তাপমাত্রা {round(temp)} ডিগ্রি সেলসিয়াস। অবস্থা: {desc}। {forecast_text}"
+    text = f"আজকের আবহাওয়া। এই মুহুর্তে {city} এ তাপমাত্রা {round(temp)} ডিগ্রি সেলসিয়াস। অবস্থা: {desc}। {forecast_text}"
 
     tts = gTTS(text=text, lang="bn")
     tmp_fp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
@@ -140,7 +143,6 @@ def weather_tts():
 
 @app.route("/bangla-date-time")
 def bangla_date_time():
-    """আজকের বাংলা তারিখ, দিন ও সময় বলে (সংশোধিত সংস্করণ)"""
     tz = pytz.timezone("Asia/Dhaka")
     now = datetime.now(tz)
 
@@ -197,26 +199,33 @@ def bangla_date_time():
     bn_day = to_bn_digits(str(bangla_day-1)) # To fix wtih indian time
     bn_year = to_bn_digits(str(bangla_year))
 
-    # 🕒 Time in Bengali
+    # --- English Date Addition ---
+    en_month_map = {
+        1: "জানুয়ারী", 2: "ফেব্রুয়ারী", 3: "মার্চ", 4: "এপ্রিল",
+        5: "মে", 6: "জুন", 7: "জুলাই", 8: "আগস্ট",
+        9: "সেপ্টেম্বর", 10: "অক্টোবর", 11: "নভেম্বর", 12: "ডিসেম্বর"
+    }
+    en_month_name = en_month_map[now.month]
+    en_day_num = to_bn_digits(str(now.day))
+    en_year_num = to_bn_digits(str(now.year))
+
+    # 🕒 Time in Bengali (Calculation kept but not used in text as per logic)
     hour = now.hour
     minute = now.minute
-    period = "রাত" if hour < 4 else "ভোর" if hour < 6 else "সকাল" if hour < 12 else "দুপুর" if hour < 16 else "বিকেল" if hour < 18 else "সন্ধ্যা" if hour < 20 else "রাত"
     hour_12 = hour % 12 or 12
-
     bn_hour = to_bn_digits(str(hour_12))
     bn_minute = to_bn_digits(f"{minute:02d}")
 
-    # Final Text
+    # Final Text Updated
     text = (
-        f"আজ {bn_day}ই {bangla_month}, {bn_year} বঙ্গাব্দ, {bn_day_name}। "
-        f"এখন সময় {period} {bn_hour}টা {bn_minute} মিনিট।"
+        f"আজ {bn_day_name}, বাংলাঃ {bn_day}ই {bangla_month}, {bn_year} বঙ্গাব্দ। "
+        f"ইংরেজিঃ {en_day_num}ই {en_month_name} {en_year_num}।"
     )
 
-    return tts_bangla(text, f"date_time::{now.strftime('%Y-%m-%d-%H:%M')}")
+    return tts_bangla(text, f"date_time::{now.strftime('%Y-%m-%d-%H')}")
 
 @app.route("/bangla-time")
 def bangla_time():
-    """আজকের বর্তমান সময় বলে (সংশোধিত সংস্করণ)"""
     tz = pytz.timezone("Asia/Dhaka")
     now = datetime.now(tz)
 
@@ -231,12 +240,14 @@ def bangla_time():
         return s.translate(str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯"))
 
     bn_hour = to_bn_digits(str(hour_12))
-    bn_minute = to_bn_digits(f"{minute:02d}")
-
-    # Final Text
-    text = (
-        f"এখন সময়, {period} {bn_hour}টা {bn_minute} মিনিট।"
-    )
+    
+    # Updated Logic: Handle exact hours and minutes 1-9
+    if minute == 0:
+        text = f"এখন সময়, {period} {bn_hour}টা।"
+    else:
+        # str(minute) automatically removes leading zero (e.g., 5 instead of 05)
+        bn_minute = to_bn_digits(str(minute))
+        text = f"এখন সময়, {period} {bn_hour}টা {bn_minute} মিনিট।"
 
     return tts_bangla(text, f"date_time::{now.strftime('%Y-%m-%d-%H:%M')}")
 
@@ -274,7 +285,7 @@ def ping():
 def alive():
     today = datetime.today().date()
     cache_key = f"alive::{today.strftime('%Y-%m-%d')}"
-    return tts_bangla("য়ি", cache_key)
+    return tts_bangla("য়ি", cache_key)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
