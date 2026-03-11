@@ -80,21 +80,24 @@ def weather_tts():
     resp_now = requests.get(url_now, params=params_now, timeout=10)
     if resp_now.status_code != 200:
         return jsonify({"error": "weather api failed", "detail": resp_now.text}), 502
+    
     now = resp_now.json()
     temp = now["main"]["temp"]
     desc = now["weather"][0]["description"]
+    weather_main = now["weather"][0]["main"].lower() # For precise rain/storm detection
 
-    # small translation map
+    # small translation map (slightly adjusted for natural sentences)
     desc_map = {
-        "clear sky": "পরিষ্কার আকাশ",
-        "few clouds": "কিছু মেঘ",
-        "scattered clouds": "বিক্ষিপ্ত মেঘ",
+        "clear sky": "পরিষ্কার",
+        "few clouds": "কিছুটা মেঘলা",
+        "scattered clouds": "বিক্ষিপ্ত মেঘলা",
         "broken clouds": "আংশিক মেঘলা",
         "overcast clouds": "সম্পূর্ণ মেঘলা",
         "light rain": "হালকা বৃষ্টি",
         "moderate rain": "মাঝারি বৃষ্টি",
         "heavy rain": "তীব্র বৃষ্টি",
-        "thunderstorm": "বজ্রসহ বৃষ্টি"
+        "thunderstorm": "বজ্রসহ বৃষ্টি",
+        "drizzle": "গুঁড়ি গুঁড়ি বৃষ্টি"
     }
     for en, bn in desc_map.items():
         if en in desc.lower():
@@ -105,30 +108,78 @@ def weather_tts():
     url_forecast = "https://api.openweathermap.org/data/2.5/forecast"
     params_fore = {"q": city, "appid": OPENWEATHER_KEY, "units": units}
     resp_fore = requests.get(url_forecast, params=params_fore, timeout=10)
+    
+    # Using datetime to check the month for seasonal context
+    current_month = datetime.now(pytz.timezone("Asia/Dhaka")).month
+
     if resp_fore.status_code == 200:
         fore = resp_fore.json()
         temps = []
         rains = 0
+        storm_warning = False
+
         for item in fore["list"][:24*3//3]:  # next 3 days (3h intervals)
             temps.append(item["main"]["temp"])
-            if "rain" in item:
+            condition = item["weather"][0]["main"].lower()
+            if condition in ["rain", "drizzle", "thunderstorm"]:
                 rains += 1
+            if condition == "thunderstorm":
+                storm_warning = True
+
         avg_temp = sum(temps)/len(temps)
-        rain_msg = (
-            "আগামী তিন দিনে বৃষ্টি হবার সম্ভাবনা আছে।" if rains > 0 else
-            "আগামী তিন দিনে বৃষ্টি হবার সম্ভাবনা নেই।"
-        )
+        
+        # Natural forecast phrasing
+        if storm_warning:
+            rain_msg = "আগামী তিন দিনে বজ্রসহ ঝড়-বৃষ্টির সম্ভাবনা রয়েছে।"
+        elif rains > 0:
+            rain_msg = "আগামী তিন দিনে বৃষ্টির সম্ভাবনা রয়েছে।"
+        else:
+            rain_msg = "আগামী তিন দিনে বৃষ্টির কোনো সম্ভাবনা নেই।"
+
         temp_trend = (
-            "তাপমাত্রা কিছুটা বাড়তে পারে।" if avg_temp > temp + 2 else
+            "তাপমাত্রা আরও কিছুটা বাড়তে পারে।" if avg_temp > temp + 2 else
             "তাপমাত্রা কিছুটা কমতে পারে।" if avg_temp < temp - 2 else
-            "তাপমাত্রা প্রায় একই থাকবে।"
+            "আবহাওয়ার তেমন কোনো বড় পরিবর্তনের সম্ভাবনা নেই।"
         )
-        forecast_text = f"{rain_msg} {temp_trend}"
+        forecast_text = f"পূর্বাভাস অনুযায়ী {rain_msg} {temp_trend}"
     else:
-        forecast_text = "আগামী তিন দিনের পূর্বাভাস পাওয়া যায়নি।"
+        forecast_text = "আগামী তিন দিনের পূর্বাভাস এই মুহূর্তে পাওয়া যাচ্ছে না।"
+
+    # --- Contextual Text Generation (Season & Storm Check) ---
+    current_feel = f"আকাশ {desc}।"
+    advice = ""
+    is_raining_now = weather_main in ["rain", "drizzle", "thunderstorm"]
+
+    if is_raining_now:
+        if weather_main == "thunderstorm":
+            current_feel = "বাইরে বজ্রসহ বৃষ্টি হচ্ছে বা ঝড়ের সম্ভাবনা রয়েছে।"
+            advice = "নিরাপদে থাকুন এবং প্রয়োজন ছাড়া বাইরে বের হবেন না।"
+        else:
+            current_feel = f"বাইরে {desc} হচ্ছে।"
+            advice = "বাইরে বের হলে ছাতা সাথে রাখতে ভুলবেন না।"
+    else:
+        # Seasonal text
+        if current_month in [11, 12, 1, 2]: # Winter
+            if temp < 15:
+                current_feel = f"আকাশ {desc}। বাইরে বেশ কনকনে শীত বা তীব্র শৈত্যপ্রবাহ চলছে।"
+                advice = "গরম কাপড় সাথে রাখুন।"
+            elif temp <= 22:
+                current_feel = f"আকাশ {desc}। বাইরে ভালোই শীত অনুভূত হচ্ছে।"
+        elif current_month in [3, 4, 5]: # Summer
+            if temp > 35:
+                current_feel = f"আকাশ {desc}। বাইরে প্রচণ্ড রোদ এবং তীব্র গরম।"
+                advice = "প্রচুর পানি পান করুন এবং ছায়ায় থাকার চেষ্টা করুন।"
+            elif temp >= 30:
+                current_feel = f"আকাশ {desc}। বাইরে বেশ গরম অনুভূত হচ্ছে।"
+        else: # Monsoon / Autumn without rain right now
+            current_feel = f"আকাশ {desc}।"
+            if temp >= 30:
+                current_feel += " বাতাসে আর্দ্রতা থাকায় ভ্যাপসা গরম লাগতে পারে।"
 
     # --- final text ---
-    text = f"আজকের আবহাওয়া। এই মুহুর্তে {city} এ তাপমাত্রা {round(temp)} ডিগ্রি সেলসিয়াস। অবস্থা: {desc}। {forecast_text}"
+    # Merge parts and clean up extra spaces if 'advice' is empty
+    raw_text = f"আজকের আবহাওয়া। এই মুহূর্তে {city} এ তাপমাত্রা {round(temp)} ডিগ্রি সেলসিয়াস। {current_feel} {advice} {forecast_text}"
+    text = " ".join(raw_text.split())
 
     tts = gTTS(text=text, lang="bn")
     tmp_fp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
